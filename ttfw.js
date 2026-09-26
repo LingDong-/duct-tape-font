@@ -59,6 +59,11 @@ function encode_ttf(info,glyphs,kerning){
   })
   for (let i = 0; i < glyphs.length; i++){
     if (!glyphs[i].bb) glyphs[i].bb = get_bbox(glyphs[i].contours.flat());
+    for (let k in glyphs[i].bb){
+      if (!Number.isFinite(glyphs[i].bb[k])){
+        glyphs[i].bb[k] = 0;
+      }
+    }
   }
   let u2idx = {};
   for (let i = 0; i < glyphs.length; i++){
@@ -125,47 +130,53 @@ function encode_ttf(info,glyphs,kerning){
     tbl.hmtx.push(...u16(glyphs[i].lsb));
   }
 
-  tbl.cmap.push(0,0,0,1 );
-  tbl.cmap.push(0,0,0,3 );
-  tbl.cmap.push(0,0,0,12);
+
+  tbl.cmap.push(0,0);
+  tbl.cmap.push(0,2);
+  const CMAP_SUB_OFFSET = 4 + 2*8;
+  tbl.cmap.push(0,0);
+  tbl.cmap.push(0,3);
+  tbl.cmap.push(...u32(CMAP_SUB_OFFSET));
+  tbl.cmap.push(0,3);
+  tbl.cmap.push(0,1);
+  tbl.cmap.push(...u32(CMAP_SUB_OFFSET));
+
+
+  let sub4start = tbl.cmap.length;
 
   tbl.cmap.push(0,4);
-  tbl.cmap.push(0,0);//length
   tbl.cmap.push(0,0);
-
+  tbl.cmap.push(0,0);
   let segs = [];
   for (let i = 0; i < glyphs.length; i++){
     if (segs.length && glyphs[i].unicode == segs.at(-1)[1]+1){
       segs.at(-1)[1]++;
-    }else{
-      segs.push([glyphs[i].unicode,glyphs[i].unicode]);
+    } else {
+      segs.push([glyphs[i].unicode, glyphs[i].unicode]);
     }
   }
   segs.push([0xffff,0xffff]);
 
-  tbl.cmap.push(...u16(segs.length*2));
-  let sr = 1<<(~~Math.log2(segs.length)+1);
-  tbl.cmap.push(...u16( sr ));
-  tbl.cmap.push(...u16( ~~Math.log2(sr/2) ));
-  tbl.cmap.push(...u16( 2*segs.length-sr ));
-  for (let i = 0; i < segs.length; i++){
-    tbl.cmap.push(...u16(segs[i][1]));
-  }
+  let segCountX2 = segs.length * 2;
+  tbl.cmap.push(...u16(segCountX2));
+  let sr = 1 << (~~Math.log2(segs.length));
+  tbl.cmap.push(...u16(sr * 2));
+  tbl.cmap.push(...u16(~~Math.log2(sr)));
+  tbl.cmap.push(...u16(segCountX2 - sr * 2));
+  for (let i = 0; i < segs.length; i++) tbl.cmap.push(...u16(segs[i][1]));
   tbl.cmap.push(0,0);
-  for (let i = 0; i < segs.length; i++){
-    tbl.cmap.push(...u16(segs[i][0]));
-  }
+  for (let i = 0; i < segs.length; i++) tbl.cmap.push(...u16(segs[i][0]));
   let ng = 0;
   for (let i = 0; i < segs.length-1; i++){
-    tbl.cmap.push(...u16(   (ng-segs[i][0]+65536)%65536 ));
-    ng += segs[i][1]-segs[i][0]+1;
+    tbl.cmap.push(...u16( (ng - segs[i][0] + 65536) % 65536 ));
+    ng += segs[i][1] - segs[i][0] + 1;
   }
   tbl.cmap.push(0,1);
-  for (let i = 0; i < segs.length; i++){
-    tbl.cmap.push(0,0);
-  }
-  let cmapl = tbl.cmap.length-12;
-  ;[tbl.cmap[14],tbl.cmap[15]] = u16(cmapl);
+  for (let i = 0; i < segs.length; i++) tbl.cmap.push(0,0);
+
+  let sub4len = tbl.cmap.length - sub4start;
+  tbl.cmap[sub4start+2] = (sub4len>>8)&0xff;
+  tbl.cmap[sub4start+3] = sub4len & 0xff;
 
 
   tbl.name.push(0,0,0,19*3);
@@ -204,8 +215,8 @@ function encode_ttf(info,glyphs,kerning){
   }
 
   add_name(0,info.copyright??"Copyright notice");
-  add_name(1,info.family);
-  add_name(2,info.style);
+  add_name(1,info.family+' '+info.style);
+  add_name(2,'Regular');
   add_name(3,info.family+' '+info.style);
   add_name(4,info.family+' '+info.style);
   add_name(5,info.version??"0.0");
@@ -246,6 +257,14 @@ function encode_ttf(info,glyphs,kerning){
     console.log(i,'/',glyphs.length)
     tbl.loca.push(...u32(tbl_glyf.length));
 
+    let contours = glyphs[i].contours.filter(c => c.length > 0);
+    let totalPts = contours.reduce((a,c)=>a+c.length, 0);
+
+    if (contours.length === 0 || totalPts === 0){
+      while (tbl_glyf.length % 4) tbl_glyf.push(0);
+      continue;
+    }
+
     tbl_glyf.push(...u16(glyphs[i].contours.length));
     tbl_glyf.push(...u16(~~glyphs[i].bb.xmin));
     tbl_glyf.push(...u16(~~glyphs[i].bb.ymin));
@@ -279,6 +298,7 @@ function encode_ttf(info,glyphs,kerning){
         py=~~y;
       }
     }
+    while (tbl_glyf.length % 4) tbl_glyf.push(0);
   }
   tbl.glyf = tbl_glyf.subarray();
   tbl.loca.push(...u32(tbl.glyf.length));
@@ -324,10 +344,10 @@ function encode_ttf(info,glyphs,kerning){
   tbl['OS/2'].push(0,0);
   tbl['OS/2'].push(0,0,0,0,0,0,0,0,0,0);
 
-  tbl['OS/2'].push(0,0,0,0);
-  tbl['OS/2'].push(0,0,0,0);
-  tbl['OS/2'].push(0,0,0,0);
-  tbl['OS/2'].push(0,0,0,0);
+  tbl['OS/2'].push(0xFF,0xFF,0xFF,0xFF);
+  tbl['OS/2'].push(0xFF,0xFF,0xFF,0xFF);
+  tbl['OS/2'].push(0xFF,0xFF,0xFF,0xFF);
+  tbl['OS/2'].push(0x07,0xFF,0xFF,0xFF);
 
   tbl['OS/2'].push(0x70,0x77,0x6e,0x64);
   tbl['OS/2'].push(0,0b0100_0000);
@@ -335,14 +355,13 @@ function encode_ttf(info,glyphs,kerning){
   tbl['OS/2'].push(...u16(glyphs.at(-1).unicode));
 
   tbl['OS/2'].push(...u16(info.asc));
-  tbl['OS/2'].push(...u16(info.dsc));
+  tbl['OS/2'].push(...u16(-info.dsc));
   tbl['OS/2'].push(...u16(info.line_gap??0));
   tbl['OS/2'].push(...u16(info.asc));
-  tbl['OS/2'].push(...u16(info.dsc));
+  tbl['OS/2'].push(...u16(-info.dsc));
 
-  tbl['OS/2'].push(0,0,0,1);
-  tbl['OS/2'].push(0,0,0,0);
-
+  tbl['OS/2'].push(0x00,0x3F,0x01,0xFF);
+  tbl['OS/2'].push(0xFF,0xFF,0x00,0x00);
 
   // let bytes = [0,1,0,0];
   let bytes = new ByteVector(); bytes.push(0,1,0,0);
