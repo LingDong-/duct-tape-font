@@ -1,0 +1,13 @@
+{
+  "f_ang_abs"   :0.01,
+  "f_ang_rel"   :0.1,
+  "f_spring"    :0.5,
+  "f_border"    :0.03,
+  "f_repel_seg" :0.004,
+  "f_repel_pt"  :0.002,
+  "len_seg"     :16.0,
+  "mul_compress":0.05,
+  "mul_hit_seg" :200.0,
+  "mul_hit_pt"  :500.0,
+  "w_stroke"    :80.0
+}

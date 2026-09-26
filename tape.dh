@@ -1,0 +1,456 @@
+/*
+usage:
+
+dither -xvt c tape.dh [action] [config.json]
+
+actions:
+  show      visualize simulation
+  dump      write renders to file
+  showdump  both
+
+about dither programming language: 
+https://github.com/LingDong-/dither-lang
+*/
+
+include "std/rand"
+include "std/geom"
+include "std/math"
+include "std/list"
+include "std/vec"
+include "std/io"
+include "std/drw"
+include "std/time"
+include "std/font"
+include "std/img"
+include "std/arr"
+include "std/str"
+include "std/sys"
+include "std/exch"
+
+action := sys.argv()[0];
+DO_ANIM := 0;
+DO_WRITE := 0;
+if (action == "show"){
+  DO_ANIM = 1;
+}else if (action == "dump"){
+  DO_WRITE = 1;
+}else if (action == "showdump"){
+  DO_ANIM = 1;
+  DO_WRITE = 1;
+}
+
+pth_cfg := sys.argv()[1];
+txt_cfg := str.decode(io.read_file(pth_cfg),"utf-8");
+cfg := (exch.decode[exch.JSON](txt_cfg)).data as dict[str,exch.JSON];
+
+F_ANG_ABS   := cfg["f_ang_abs"   ].data as f32;
+F_ANG_REL   := cfg["f_ang_rel"   ].data as f32;
+F_SPRING    := cfg["f_spring"    ].data as f32;
+F_BORDER    := cfg["f_border"    ].data as f32;
+F_REPEL_SEG := cfg["f_repel_seg" ].data as f32;
+F_REPEL_PT  := cfg["f_repel_pt"  ].data as f32;
+LEN_SEG     := cfg["len_seg"     ].data as f32;
+MUL_COMPRESS:= cfg["mul_compress"].data as f32;
+MUL_HIT_SEG := cfg["mul_hit_seg" ].data as f32;
+MUL_HIT_PT  := cfg["mul_hit_pt"  ].data as f32;
+W_STROKE    := cfg["w_stroke"    ].data as f32;
+
+hz := str.decode(io.read_file("mmhz_trad.hershey.txt"),'utf-8').split("\n")
+
+func parse_hf(s:str):list[list[vec[f32,2]]]{
+  ps := list[list[vec[f32,2]]]{list[vec[f32,2]]{}};
+  for (i := 10; i < s.length(); i+=2){
+    if (s[i] == ' ' && s[i+1] == 'R'){
+      ps.push(list[vec[f32,2]]{});
+    }else{
+      ps[ps.length()-1].push({s[i]-'R' + 32, s[i+1]-'R' + 32})
+    }
+  }
+  for (i := 0; i < ps.length(); i++){
+    ps[i] = geom.poly_simplify(ps[i],1.0)
+  }
+  return ps;
+}
+
+
+func poke(polys:list[list[vec[f32,2]]]){
+  for (i := 0; i < polys.length(); i++){
+    for (j := 0; j < polys[i].length(); j++){
+      
+      if (j == 0 || j==polys[i].length()-1){
+        a := polys[i][j];
+        b := (j==0) ? polys[i][j+1] : polys[i][j-1];
+        d := (a-b).dir();
+        c := a + d * 4.0;
+        e := a + d * 0.001
+
+        for (k := 0; k < polys.length(); k++){
+          if (k==i) continue;
+          for (l := 0; l < polys[k].length()-1; l++){
+            [b,v] := geom.line_intersect(
+              e,c,
+              polys[k][l],polys[k][l+1],
+              geom.LHS_SEGMENT|geom.RHS_SEGMENT|geom.RET_POINTS
+            );
+            if (b){
+              polys[i][j] = v + d * 0.001;
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+
+func simp(polys:list[list[vec[f32,2]]]){
+  for (i := 0; i < polys.length(); i++){
+    [cen,ext,axs] := geom.bbox(polys[i],geom.MODE_ORIENTED|1);
+    if (ext.x / ext.y > 5.0){
+      v := {axs[0],axs[2]};
+      c0 := cen+v*ext.x
+      c1 := cen-v*ext.x
+      polys[i] = list[vec[f32,2]]{c0,c1}
+    }else{
+      eps := ((ext.x+ext.y)*0.75 + 32) *0.1;
+      polys[i] = geom.poly_simplify(polys[i],eps);
+      for (j:=0;j<polys[i].length()-1;j++){
+        u := polys[i][j+1]-polys[i][j];
+        l := u.mag();
+        v := u.dir()*l;
+        polys[i][j+1] = polys[i][j]+v;
+      }
+    }
+    
+  }
+}
+
+func vang(a:vec[f32,2],b:vec[f32,2]):f32{
+  cross := a.x*b.y - a.y*b.x
+  dot   := a.x*b.x + a.y*b.y
+  angle := math.atan2(cross, dot);
+  return angle;
+}
+
+
+typedef Node = {
+  pos : vec[f32,2] = {0.,0.};
+  nbr := list[i32]{};
+  ang := list[f32]{};
+  aan := list[f32]{};
+  len := list[f32]{};
+  vel : vec[f32,2] = {0.,0.};
+}
+
+func add_node(nodes:list[Node],v:vec[f32,2]):i32{
+  md := math.INF;
+  mi := -1;
+  for (i := 0; i < nodes.length(); i++){
+    d := (nodes[i].pos-v).mag();
+    if (d < md){
+      md = d;
+      mi = i;
+    }
+  }
+  if (md < 3.0){
+    nodes[mi].pos = (nodes[mi].pos+v)*0.5;
+    return mi;
+  }
+  nd := Node{pos:v};
+  nodes.push(nd);
+  return nodes.length()-1;
+}
+
+func add_edge(nodes:list[Node],a:i32,b:i32){
+  if (a==b) return;
+  if (a==-1 || b==-1) return;
+
+  for (i := 0; i < nodes[a].nbr.length(); i++){
+    if (nodes[a].nbr[i] == b){
+      return;
+    }
+  }
+  nodes[a].nbr.push(b);
+}
+
+func build_graph(polys:list[list[vec[f32,2]]]):list[Node]{
+  nodes := list[Node]{};
+  for (i := 0; i < polys.length(); i++){
+    prv := -1;
+    for (j := 0; j < polys[i].length(); j++){
+      cur := add_node(nodes,polys[i][j]);
+      add_edge(nodes,prv,cur);
+      add_edge(nodes,cur,prv);
+      
+      if (j < polys[i].length()-1){
+        isects := list[f32]{}
+        for (k := 0; k < polys.length(); k++){
+          if (k==i) continue;
+          for (l := 0; l < polys[k].length()-1; l++){
+            [b,v] := geom.line_intersect(
+              polys[i][j],polys[i][j+1],
+              polys[k][l],polys[k][l+1],
+              geom.LHS_SEGMENT|geom.RHS_SEGMENT|geom.RET_PARAMS
+            );
+            if (b){
+              isects.push(v.x)
+            }
+          }
+        }
+        isects.sort(func(x:f32):f32{return x});
+        for (k := 0; k < isects.length(); k++){
+          v := polys[i][j] * (1-isects[k]) + polys[i][j+1] * isects[k];
+          nxt := add_node(nodes,v);
+          add_edge(nodes,cur,nxt);
+          add_edge(nodes,nxt,cur);
+          cur = nxt;
+        }
+      }
+      prv = cur;
+    }
+  }
+  for (i := 0; i < nodes.length(); i++){
+    nodes[i].nbr.sort(func(idx:i32):f32{
+      a := nodes[i].pos;
+      b := nodes[idx].pos;
+      return math.atan2(b.y-a.y,b.x-a.x);
+    });
+    n := nodes[i].nbr.length();
+    for (j := 0; j < n; j++){
+      a := nodes[i].pos;
+      b := nodes[nodes[i].nbr[j]].pos;
+      c := nodes[nodes[i].nbr[(j-1+n)%n]].pos;
+      ang := vang(c-a, b-a);
+      len := (b-a).mag();
+      aan := vang({1.,0.}, b-a);
+      
+      nodes[i].ang.push(math.round(ang / (math.PI/4)) * math.PI/4 );
+      nodes[i].aan.push(math.round(aan / (math.PI/4)) * math.PI/4 );
+      nodes[i].len.push(math.max(0.5,math.round(len / LEN_SEG)) * LEN_SEG);
+    }
+  }
+  return nodes;
+
+}
+
+func minang(dang:f32):f32{
+  if (math.abs(dang+math.PI*2)<math.abs(dang)){
+    dang += math.PI*2;
+  }
+  if (math.abs(dang-math.PI*2)<math.abs(dang)){
+    dang -= math.PI*2;
+  }
+  return dang;
+}
+
+
+func near_pt_on_seg(p:vec[f32,2], p0:vec[f32,2], p1:vec[f32,2]):vec[f32,2]{
+  x := p.x; y := p.y;
+  x1 := p0.x; y1 := p0.y;
+  x2 := p1.x; y2 := p1.y;
+  A := x - x1; B := y - y1; C := x2 - x1; D := y2 - y1;
+  dot := A*C + B*D;
+  len_sq := C*C + D*D;
+  param := -1.0;
+  if (len_sq != 0){
+    param = dot / len_sq;
+  }
+  if (param < 0){
+    return {x1, y1};
+  }else if (param > 1){
+    return {x2, y2};
+  }else{
+    xx := x1 + param*C;
+    yy := y1 + param*D;
+    return {xx, yy};
+  }
+}
+
+func simulate(nodes:list[Node]){
+
+  for (i := 0; i < nodes.length(); i++){
+    n := nodes[i].nbr.length();
+    for (j := 0; j < n; j++){
+      a := nodes[i].pos;
+      b := nodes[nodes[i].nbr[j]].pos;
+      c := nodes[nodes[i].nbr[(j-1+n)%n]].pos;
+      dir := (b-a).dir()
+      ang := vang(c-a, b-a);
+      aan := vang({1.,0.}, b-a);
+      
+      len := (b-a).mag();
+      dlen := len - nodes[i].len[j];
+      if (dlen < 0.0) dlen *= MUL_COMPRESS;
+      nodes[i].vel               += dir * dlen * F_SPRING;
+      nodes[nodes[i].nbr[j]].vel -= dir * dlen * F_SPRING;
+
+      tdr := -{-dir.y,dir.x}
+      dang := minang( ang - nodes[i].ang[j] );
+      daan := minang( aan - nodes[i].aan[j] );
+
+      nodes[nodes[i].nbr[j]].vel += dang * tdr * F_ANG_REL;
+      nodes[i].vel               -= dang * tdr * F_ANG_REL;
+      nodes[nodes[i].nbr[j]].vel += daan * tdr * F_ANG_ABS;
+      nodes[i].vel               -= daan * tdr * F_ANG_ABS;
+      
+      for (k := 0; k < nodes.length(); k++){
+        if (k == i) continue;
+        if (k == nodes[i].nbr[j]) continue;
+        q := nodes[k].pos;
+        p := near_pt_on_seg(q,a,b);
+        l := (p-q).mag();
+        
+        if (l < 10.0){
+          d := p-q;
+          if (l < 2.0) d *= MUL_HIT_SEG
+          nodes[k].vel               -= d * F_REPEL_SEG;
+          nodes[i].vel               += d * F_REPEL_SEG/2;
+          nodes[nodes[i].nbr[j]].vel += d * F_REPEL_SEG/2;
+        }
+      }
+    }
+
+    if (nodes[i].pos.x < 8) nodes[i].vel += {(8 - nodes[i].pos.x),0.} * F_BORDER;
+    if (nodes[i].pos.y < 8) nodes[i].vel += {0.,(8 - nodes[i].pos.y)} * F_BORDER;
+    if (nodes[i].pos.x >56) nodes[i].vel += {(56- nodes[i].pos.x),0.} * F_BORDER;
+    if (nodes[i].pos.y >56) nodes[i].vel += {0.,(56- nodes[i].pos.y)} * F_BORDER;
+
+    for (k := 0; k < nodes.length(); k++){
+      if (k == i) continue;
+      q := nodes[k].pos;
+      p := nodes[i].pos;
+      l := (p-q).mag();
+      if (l < 10.0){
+        d := p-q;
+        if (l < 2.0) d *= MUL_HIT_PT
+        nodes[k].vel               -= d * F_REPEL_PT;
+        nodes[i].vel               += d * F_REPEL_PT;
+      }
+    }
+  
+  }
+  for (i := 0; i < nodes.length(); i++){
+    nodes[i].vel /= 2.0;
+    nodes[i].pos += nodes[i].vel;
+    nodes[i].vel *= 0.001;
+  }
+}
+
+
+func fstroke(x0:f32,y0:f32,x1:f32,y1:f32,w:f32){
+  l := math.hypot(y1-y0,x1-x0);
+  q := rand.random(0.25,0.9)
+  drw.stroke(0)
+  drw.stroke_weight(2)
+  drw.no_fill();
+  drw.push_matrix();
+  drw.translate(x0,y0);
+  drw.rotate_deg(math.atan2(y1-y0,x1-x0)*180/math.PI)
+  for (i := 0; i < w*0.6667; i++){
+    b := rand.random()<((1-q)*0.6);
+    o := rand.noise(i*0.5,2)*5.0;
+    drw.begin_shape();
+    for (j := 0.0; j < l; j+=1.5){
+      t := (j as f32)/l
+      drw.vertex(j+o,i*1.5-w/2);
+      r := rand.noise(i*0.01,j*0.01 + rand.noise(i*0.5))*rand.random(0.5,1.0)*math.sqrt(math.sin(t*math.PI));
+      if (r>q && b){
+        drw.end_shape();
+        drw.begin_shape();
+      }
+    }
+    drw.end_shape();
+  }
+  drw.pop_matrix();
+}
+
+
+drw.size(1024,1024);
+
+
+func draw_polys(polys:list[list[vec[f32,2]]]){
+  drw.begin_shape();
+  for (i := 0; i < polys.length(); i++){
+    for (j := 0; j < polys[i].length(); j++){
+      drw.vertex(...polys[i][j]);
+    }
+    drw.next_contour(0);
+  }
+  drw.end_shape();
+}
+
+
+pg := drw.create_graphics(1024,1024);
+
+for (i:=0;i<hz.length();i+=1){
+  
+  polys := parse_hf(hz[i])
+  simp(polys)
+  poke(polys)
+  nodes := build_graph(polys);
+
+  w:=W_STROKE
+  for (t := 0; t < 50; t++){
+    if (DO_ANIM){
+      pg.begin();
+      drw.background(1);
+      drw.push_matrix();
+      drw.translate(64,64)
+      for (j := 0; j < nodes.length(); j++){
+        drw.fill(0);
+        drw.no_stroke();
+        if (nodes[j].nbr.length() > 1) drw.ellipse(...(nodes[j].pos*14),w+1,w+1);
+        drw.stroke_weight(w);
+        drw.stroke(0);
+        for (k := 0; k < nodes[j].nbr.length(); k++){
+          drw.line(...(nodes[j].pos*14), ...(nodes[nodes[j].nbr[k]].pos*14));
+        }
+      }
+      for (j := 0; j < nodes.length(); j++){
+        drw.stroke(1,1,0);
+        drw.stroke_weight(4);
+        drw.fill(1,0,0);
+        if (nodes[j].nbr.length() > 2) drw.fill(1,0,1)
+        drw.ellipse(...(nodes[j].pos*14),16,16);
+        for (k := 0; k < nodes[j].nbr.length(); k++){
+          drw.line(...(nodes[j].pos*14), ...(nodes[nodes[j].nbr[k]].pos*14));
+        }
+        drw.stroke(0,1,1);
+        drw.line(...(nodes[j].pos*14), ...((nodes[j].pos+nodes[j].vel.dir()*4)*14))
+      }
+      drw.pop_matrix();
+      pg.end();
+      pg.draw(0,0)
+      drw.poll();
+    }
+    for (k:=0;k<60;k++) simulate(nodes);
+  }
+
+  pg.begin();
+  drw.background(1);
+  drw.push_matrix();
+  drw.translate(64,64)
+  for (j := 0; j < nodes.length(); j++){
+    drw.fill(0);
+    drw.no_stroke();
+    if (nodes[j].nbr.length() > 1) drw.ellipse(...(nodes[j].pos*14),w+1,w+1);
+    drw.stroke_weight(w);
+    drw.stroke(0);
+    for (k := 0; k < nodes[j].nbr.length(); k++){
+      fstroke(...(nodes[j].pos*14), ...(nodes[nodes[j].nbr[k]].pos*14),w);
+    }
+  }
+  drw.pop_matrix();
+  pg.end();
+
+  for (i := 0; i < 1+DO_ANIM*199; i++){
+    pg.draw(0,0)
+    drw.poll();
+  }
+  if (DO_WRITE){
+    fn := hz[i].slice(0,5)
+    io.write_file("render/%{fn}.png",img.encode("png",pg.read_pixels()))
+  }
+}
+
+// while(1) drw.poll();
