@@ -18,7 +18,7 @@ You can download the fonts with preset styles from [Releases](https://github.com
 Two styles are currently provided, one with strict octilinear angular constraint (Regular) and one without (Irregular):
 
 - [DuctTapeRegular.ttf](https://github.com/LingDong-/duct-tape-font/releases) 膠帶體·正
-- [DuctTapeIrregular.ttf](https://github.com/LingDong-/duct-tape-font/releases) 擬草體·拗
+- [DuctTapeIrregular.ttf](https://github.com/LingDong-/duct-tape-font/releases) 膠帶體·拗
 
 ### Generate from Scratch
 
