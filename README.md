@@ -13,12 +13,14 @@ Algorithmically-generated, duct-tape-resembling Chinese typeface by applying a f
 
 ## Instructions
 
-You can download the fonts with preset styles from [Releases](https://github.com/LingDong-/duct-tape-font/releases). The fonts can be used with any program that supports TTF format. They're best set with top-to-bottom (TTL) layout.
+You can download the fonts with preset styles from [Releases](https://github.com/LingDong-/duct-tape-font/releases). The fonts can be used with any program that supports TTF format.
 
 Two styles are currently provided, one with strict octilinear angular constraint (Regular) and one without (Irregular):
 
 - [DuctTapeRegular.ttf](https://github.com/LingDong-/duct-tape-font/releases) 膠帶體·正
 - [DuctTapeIrregular.ttf](https://github.com/LingDong-/duct-tape-font/releases) 膠帶體·拗
+
+6000+ statistically most frequent Traditional Chinese characters are included in these precompiled fonts for a reasonably-sized file (and for fast iteration). However, the process can be applied to the entirety of the input data (9K+ TC+SC characters) to create a more comprehensive font, see below:
 
 ### Generate from Scratch
 
@@ -49,6 +51,14 @@ All samples below (as well as the banner image) are typeset with fonts created w
 ![](screenshots/002.png)
 ![](screenshots/004.png)
 ![](screenshots/005.png)
+
+## See Also
+
+This is part of a series of typographic experiments. Check out the other ones below:
+
+| [Computer Grass](https://github.com/LingDong-/computer-grass/) | [Bad Cut](https://github.com/LingDong-/bad-cut-font/) |
+|---|---|
+| [![](screenshots/ln0.png)](https://github.com/LingDong-/computer-grass/)  | [![](screenshots/ln2.png)](https://github.com/LingDong-/bad-cut-font/) |
 
 -------
 
